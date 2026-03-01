@@ -29,6 +29,13 @@ from analytics.physical import (
     avg_position,
     heatmap_grid,
 )
+from analytics.shape import (
+    team_centroid,
+    team_dimensions,
+    team_surface_area,
+    defensive_line_height,
+    line_distances,
+)
 
 
 def compute_possession(run_dir: str) -> dict:
@@ -137,6 +144,49 @@ def compute_physical(run_dir: str) -> dict:
         "physical_accel": df_accel,
         "physical_avgpos": df_avgpos,
         "physical_heatmap": df_heat,
+    }
+    for name, frame in parquets.items():
+        frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
+
+    return parquets
+
+
+def compute_shape(run_dir: str) -> dict:
+    """Load artifacts, run all team shape analytics, write outputs.
+
+    Writes into ``<run_dir>/stats/``:
+        - shape_centroid.parquet
+        - shape_dims.parquet
+        - shape_area.parquet
+        - shape_def_line.parquet
+        - shape_line_dist.parquet
+
+    Heavy per-frame metrics (area, def line, line distances) are sampled
+    at 1 Hz (every *fps* frames) by default.
+
+    Returns a dict with all DataFrames keyed by name.
+    """
+    meta = load_run_meta(run_dir)
+    df = load_frames(run_dir)
+    fps = int(meta.get("fps", 24))
+
+    df_players = expand_players(df)
+
+    df_centroid = team_centroid(df_players)
+    df_dims = team_dimensions(df_players)
+    df_area = team_surface_area(df_players, sample_every=fps)
+    df_def_line = defensive_line_height(df_players, meta=meta, sample_every=fps)
+    df_line_dist = line_distances(df_players, sample_every=fps)
+
+    stats_dir = os.path.join(run_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+
+    parquets = {
+        "shape_centroid": df_centroid,
+        "shape_dims": df_dims,
+        "shape_area": df_area,
+        "shape_def_line": df_def_line,
+        "shape_line_dist": df_line_dist,
     }
     for name, frame in parquets.items():
         frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
