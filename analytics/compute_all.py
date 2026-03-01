@@ -1,10 +1,11 @@
 """
-Runner that loads run artifacts and writes all possession analytics.
+Runner that loads run artifacts and writes all analytics.
 
 Usage::
 
-    from analytics.compute_all import compute_possession
+    from analytics.compute_all import compute_possession, compute_physical
     compute_possession("runs/20260301_124219_abc123")
+    compute_physical("runs/20260301_124219_abc123")
 """
 
 from __future__ import annotations
@@ -19,6 +20,15 @@ from analytics.possession import (
     compute_time_to_regain,
 )
 from analytics.zones import compute_possession_in_zones, compute_field_tilt
+from analytics.physical import (
+    expand_players,
+    distance_covered,
+    speed_profile,
+    speed_bands,
+    accelerations,
+    avg_position,
+    heatmap_grid,
+)
 
 
 def compute_possession(run_dir: str) -> dict:
@@ -89,6 +99,49 @@ def compute_possession(run_dir: str) -> dict:
     output["chains_df"] = chains_df
     output["time_to_regain_full"] = regain
     return output
+
+
+def compute_physical(run_dir: str) -> dict:
+    """Load artifacts, run all player physical analytics, write outputs.
+
+    Writes into ``<run_dir>/stats/``:
+        - physical_distance.parquet
+        - physical_speed.parquet
+        - physical_bands.parquet
+        - physical_accel.parquet
+        - physical_avgpos.parquet
+        - physical_heatmap.parquet
+
+    Returns a dict with all DataFrames keyed by name.
+    """
+    meta = load_run_meta(run_dir)
+    df = load_frames(run_dir)
+    fps = meta.get("fps", 24)
+
+    df_players = expand_players(df)
+
+    df_dist = distance_covered(df_players, fps)
+    df_speed = speed_profile(df_players)
+    df_bands = speed_bands(df_players, fps)
+    df_accel = accelerations(df_players, fps)
+    df_avgpos = avg_position(df_players)
+    df_heat = heatmap_grid(df_players, meta)
+
+    stats_dir = os.path.join(run_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+
+    parquets = {
+        "physical_distance": df_dist,
+        "physical_speed": df_speed,
+        "physical_bands": df_bands,
+        "physical_accel": df_accel,
+        "physical_avgpos": df_avgpos,
+        "physical_heatmap": df_heat,
+    }
+    for name, frame in parquets.items():
+        frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
+
+    return parquets
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
