@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local config
+.claude/
+.streamlit/
+
+# Model weights (if large)
+models/
+
+# Generated videos
+output_videos/
+
+# If input videos are large test files
+input_videos/
+
+# Training artifacts
+training/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Virtual env (if you have one)
+venv/
+.env
