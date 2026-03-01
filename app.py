@@ -209,3 +209,13 @@ if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
                     os.unlink(temp_video_file.name)
                 except PermissionError:
                     pass
+
+# ── Show Stats button (after pipeline has completed) ────────────────────────
+if 'run_dir' in st.session_state and st.session_state['run_dir']:
+    run_dir = st.session_state['run_dir']
+    stats_dir = os.path.join(run_dir, "stats")
+    if os.path.isdir(stats_dir):
+        st.markdown("---")
+        if st.button("📊 Show Stats", type="primary", use_container_width=True):
+            st.query_params["run_dir"] = run_dir
+            st.switch_page("pages/1_📊_Stats.py")
