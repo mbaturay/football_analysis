@@ -36,6 +36,13 @@ from analytics.shape import (
     defensive_line_height,
     line_distances,
 )
+from analytics.ball_movement import (
+    ball_speed_and_distance,
+    progression,
+    territory,
+    switches_of_play,
+    directness_index,
+)
 
 
 def compute_possession(run_dir: str) -> dict:
@@ -192,6 +199,71 @@ def compute_shape(run_dir: str) -> dict:
         frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
 
     return parquets
+
+
+def compute_ball_movement(run_dir: str) -> dict:
+    """Load artifacts, run all ball-movement analytics, write outputs.
+
+    Writes into ``<run_dir>/stats/``:
+        - ball_frame.parquet
+        - ball_possession_metrics.parquet
+        - ball_territory.json
+        - ball_switches.parquet
+
+    Returns a dict with all DataFrames / dicts keyed by name.
+    """
+    meta = load_run_meta(run_dir)
+    df = load_frames(run_dir)
+    fps = meta.get("fps", 24)
+
+    # Ball speed per frame
+    df_ball = ball_speed_and_distance(df, fps)
+
+    # Need possession chains for progression & directness
+    from analytics.possession import compute_possession_chains
+    chains_df, _ = compute_possession_chains(df, fps)
+
+    # Progression & directness per chain
+    df_prog = progression(df, chains_df, meta)
+    df_direct = directness_index(df_ball, chains_df, meta)
+
+    # Merge progression + directness into one table
+    if not df_prog.empty and not df_direct.empty:
+        df_metrics = df_prog.merge(
+            df_direct[["chain_id", "total_dist_m", "directness"]],
+            on="chain_id",
+            how="left",
+        )
+    else:
+        df_metrics = df_prog
+
+    # Territory dict
+    territory_dict = territory(df, meta)
+
+    # Switches of play
+    df_switches = switches_of_play(df, meta)
+
+    # ── write to disk ────────────────────────────────────────────────────
+    stats_dir = os.path.join(run_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+
+    df_ball.to_parquet(os.path.join(stats_dir, "ball_frame.parquet"), index=False)
+    df_metrics.to_parquet(
+        os.path.join(stats_dir, "ball_possession_metrics.parquet"), index=False
+    )
+    df_switches.to_parquet(
+        os.path.join(stats_dir, "ball_switches.parquet"), index=False
+    )
+
+    with open(os.path.join(stats_dir, "ball_territory.json"), "w") as f:
+        json.dump(_make_json_safe(territory_dict), f, indent=2)
+
+    return {
+        "ball_frame": df_ball,
+        "ball_possession_metrics": df_metrics,
+        "ball_territory": territory_dict,
+        "ball_switches": df_switches,
+    }
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
