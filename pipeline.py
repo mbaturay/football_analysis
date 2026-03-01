@@ -1,5 +1,7 @@
+import json
 import cv2
 import numpy as np
+import pandas as pd
 from utils import read_video, save_video
 from trackers import Tracker
 from team_assigner import TeamAssigner
@@ -7,6 +9,73 @@ from player_ball_assigner import PlayerBallAssigner
 from camera_movement_estimator import CameraMovementEstimator
 from view_transformer import ViewTransformer
 from speed_and_distance_estimator import SpeedAndDistance_Estimator
+from analytics_io import create_run_dir, save_run_meta, save_tracks_pickle, write_frames_parquet
+
+
+def _best_position(track_info):
+    """Return the best available (x, y) tuple for a track entry, or (None, None)."""
+    for key in ('position_transformed', 'position_adjusted', 'position'):
+        pos = track_info.get(key)
+        if pos is not None:
+            try:
+                return float(pos[0]), float(pos[1])
+            except (TypeError, IndexError):
+                continue
+    return None, None
+
+
+def _build_frames_df(tracks, team_ball_control, fps):
+    """Build a DataFrame with one row per frame from completed tracks."""
+    num_frames = len(tracks['players'])
+    rows = []
+
+    for frame_num in range(num_frames):
+        t = frame_num / fps
+
+        # Ball
+        ball_info = tracks['ball'][frame_num].get(1, {})
+        ball_x, ball_y = _best_position(ball_info)
+
+        # Possession
+        team_in_possession = int(team_ball_control[frame_num]) if frame_num < len(team_ball_control) else None
+
+        # Players
+        players_list = []
+        team_positions = {}  # team_id -> list of (x, y)
+        for pid, pinfo in tracks['players'][frame_num].items():
+            px, py = _best_position(pinfo)
+            player_rec = {
+                'id': int(pid),
+                'team': pinfo.get('team'),
+                'x': px,
+                'y': py,
+                'speed_kmh': pinfo.get('speed'),
+                'distance_m': pinfo.get('distance'),
+                'has_ball': pinfo.get('has_ball', False),
+            }
+            players_list.append(player_rec)
+
+            if px is not None and py is not None and pinfo.get('team') is not None:
+                team_positions.setdefault(pinfo['team'], []).append((px, py))
+
+        # Team centroids
+        centroids = {}
+        for tid, positions in team_positions.items():
+            xs = [p[0] for p in positions]
+            ys = [p[1] for p in positions]
+            centroids[tid] = {'x': sum(xs) / len(xs), 'y': sum(ys) / len(ys)}
+
+        rows.append({
+            'frame': frame_num,
+            't': round(t, 4),
+            'team_in_possession': team_in_possession,
+            'ball_x': ball_x,
+            'ball_y': ball_y,
+            'players': json.dumps(players_list),
+            'team_centroids': json.dumps(centroids),
+        })
+
+    return pd.DataFrame(rows)
 
 
 def run_pipeline(config, progress_callback=None):
@@ -15,11 +84,14 @@ def run_pipeline(config, progress_callback=None):
 
     config: dict with all pipeline parameters
     progress_callback: callable(step_name: str, progress_fraction: float)
-    Returns: (output_video_frames, output_path)
+    Returns: (output_video_frames, output_path, run_dir)
     """
     def update_progress(step, frac):
         if progress_callback:
             progress_callback(step, frac)
+
+    # Create run directory
+    run_dir = config.get('run_dir') or create_run_dir()
 
     # Step 1: Read video
     update_progress("Reading video...", 0.0)
@@ -75,7 +147,7 @@ def run_pipeline(config, progress_callback=None):
     camera_movement_estimator.add_adjust_positions_to_tracks(tracks, camera_movement_per_frame)
 
     # Step 4: View transform
-    update_progress("Applying perspective transform...", 0.45)
+    update_progress("Applying perspective transform...", 0.55)
     pixel_vertices = config.get('pixel_vertices', None)
     target_vertices = config.get('target_vertices', None)
     view_transformer = ViewTransformer(
@@ -87,19 +159,20 @@ def run_pipeline(config, progress_callback=None):
     view_transformer.add_transformed_position_to_tracks(tracks)
 
     # Step 5: Interpolate ball
-    update_progress("Interpolating ball positions...", 0.50)
+    update_progress("Interpolating ball positions...", 0.58)
     tracks["ball"] = tracker.interpolate_ball_positions(tracks["ball"])
 
     # Step 6: Speed & distance
-    update_progress("Calculating speed & distance...", 0.55)
+    update_progress("Calculating speed & distance...", 0.60)
+    fps = config.get('frame_rate', 24)
     speed_and_distance_estimator = SpeedAndDistance_Estimator(
         frame_window=config.get('frame_window', 5),
-        frame_rate=config.get('frame_rate', 24),
+        frame_rate=fps,
     )
     speed_and_distance_estimator.add_speed_and_distance_to_tracks(tracks)
 
     # Step 7: Team assignment
-    update_progress("Assigning teams...", 0.60)
+    update_progress("Assigning teams...", 0.63)
     team_assigner = TeamAssigner(
         n_clusters=config.get('n_clusters', 2),
         init_method=config.get('init_method', 'k-means++'),
@@ -112,7 +185,7 @@ def run_pipeline(config, progress_callback=None):
             tracks['players'][frame_num][player_id]['team_color'] = team_assigner.team_colors[team]
 
     # Step 8: Ball possession
-    update_progress("Assigning ball possession...", 0.70)
+    update_progress("Assigning ball possession...", 0.68)
     player_assigner = PlayerBallAssigner(
         max_player_ball_distance=config.get('max_player_ball_distance', 70),
     )
@@ -127,7 +200,30 @@ def run_pipeline(config, progress_callback=None):
             team_ball_control.append(team_ball_control[-1])
     team_ball_control = np.array(team_ball_control)
 
-    # Step 9: Draw annotations
+    # Step 9: Save run artifacts
+    update_progress("Saving run artifacts...", 0.72)
+    num_frames = len(video_frames)
+
+    run_meta = {
+        'fps': fps,
+        'num_frames': num_frames,
+        'court_width': config.get('court_width', 68),
+        'court_length': config.get('court_length', 23.32),
+        'model_path': config.get('model_path'),
+        'conf_threshold': config.get('conf_threshold', 0.1),
+        'batch_size': config.get('batch_size', 20),
+        'max_player_ball_distance': config.get('max_player_ball_distance', 70),
+        'frame_window': config.get('frame_window', 5),
+        'input_video_path': config.get('input_video_path'),
+        'pixel_vertices': config.get('pixel_vertices'),
+    }
+    save_run_meta(run_dir, run_meta)
+    save_tracks_pickle(run_dir, tracks)
+
+    df_frames = _build_frames_df(tracks, team_ball_control, fps)
+    write_frames_parquet(run_dir, df_frames)
+
+    # Step 10: Draw annotations
     update_progress("Drawing annotations...", 0.80)
     draw_config = config.get('draw_config', {})
     output_video_frames = tracker.draw_annotations(
@@ -139,7 +235,7 @@ def run_pipeline(config, progress_callback=None):
     )
     speed_and_distance_estimator.draw_speed_and_distance(output_video_frames, tracks)
 
-    # Step 10: Save video
+    # Step 11: Save video
     update_progress("Saving output video...", 0.95)
     output_path = config.get('output_video_path', 'output_videos/output_video.avi')
     save_video(
@@ -149,4 +245,4 @@ def run_pipeline(config, progress_callback=None):
     )
 
     update_progress("Done!", 1.0)
-    return output_video_frames, output_path
+    return output_video_frames, output_path, run_dir

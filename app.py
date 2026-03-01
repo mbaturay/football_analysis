@@ -194,9 +194,10 @@ if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
 
         try:
             from pipeline import run_pipeline
-            _, result_path = run_pipeline(config, progress_callback=progress_callback)
+            _, result_path, run_dir = run_pipeline(config, progress_callback=progress_callback)
             st.session_state['output_video_path'] = result_path
-            st.success("Analysis complete!")
+            st.session_state['run_dir'] = run_dir
+            st.success(f"Analysis complete! Run artifacts saved to `{run_dir}`")
             st.rerun()
         except Exception as e:
             st.error(f"Pipeline error: {e}")
