@@ -1,0 +1,54 @@
+{
+  "possession_overall": {
+    "1": 0.753,
+    "2": 0.247
+  },
+  "possession_by_half": {
+    "1": {
+      "1": 0.7934,
+      "2": 0.2066
+    },
+    "2": {
+      "1": 0.7126,
+      "2": 0.2874
+    }
+  },
+  "chains_summary": {
+    "1": {
+      "avg_possession_duration_s": 2.783,
+      "longest_possession_duration_s": 21.625,
+      "number_of_possessions": 100
+    },
+    "2": {
+      "avg_possession_duration_s": 0.885,
+      "longest_possession_duration_s": 7.583,
+      "number_of_possessions": 100
+    }
+  },
+  "time_to_regain": {
+    "1": {
+      "avg_regain_s": 0.93,
+      "median_regain_s": 0.333,
+      "count": 99
+    },
+    "2": {
+      "avg_regain_s": 2.82,
+      "median_regain_s": 0.875,
+      "count": 99
+    }
+  },
+  "zone_possession": {
+    "thirds": {},
+    "lanes": {},
+    "skipped_frames": 9004,
+    "skipped": true,
+    "reason": "Transform confidence 0% below threshold"
+  },
+  "field_tilt": {
+    "field_tilt": {},
+    "skipped_frames": 9004,
+    "skipped": true,
+    "reason": "Transform confidence 0% below threshold",
+    "attack_direction_assumption": "team 1 attacks +x in first half, -x in second half; team 2 is opposite. Halves split at time midpoint."
+  }
+}

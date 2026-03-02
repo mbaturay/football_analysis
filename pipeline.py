@@ -208,7 +208,8 @@ def run_pipeline(config, progress_callback=None):
             tracks['players'][frame_num][assigned_player]['has_ball'] = True
             team_ball_control.append(tracks['players'][frame_num][assigned_player]['team'])
         else:
-            team_ball_control.append(team_ball_control[-1])
+            # Carry forward last known team; default to team 1 if no assignment yet
+            team_ball_control.append(team_ball_control[-1] if team_ball_control else 1)
     team_ball_control = np.array(team_ball_control)
 
     # Step 9: Save run artifacts
