@@ -10,6 +10,8 @@ Thirds are split along x (length); lanes are split along y (width).
 
 from __future__ import annotations
 
+from analytics.quality import CONFIDENCE_THRESHOLD
+
 
 # ── zone helpers ─────────────────────────────────────────────────────────────
 
@@ -57,7 +59,7 @@ def classify_lane(y: float, court_width: float) -> str | None:
 
 # ── zone possession ──────────────────────────────────────────────────────────
 
-def compute_possession_in_zones(df_frames, meta: dict) -> dict:
+def compute_possession_in_zones(df_frames, meta: dict, confidence: float = 1.0) -> dict:
     """Possession share broken down by thirds and lanes for each team.
 
     Returns::
@@ -74,6 +76,10 @@ def compute_possession_in_zones(df_frames, meta: dict) -> dict:
             "skipped_frames": <int>,
         }
     """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return {"thirds": {}, "lanes": {}, "skipped_frames": len(df_frames),
+                "skipped": True, "reason": f"Transform confidence {confidence:.0%} below threshold"}
+
     court_length = meta.get("court_length", 23.32)
     court_width = meta.get("court_width", 68)
 
@@ -109,7 +115,7 @@ def compute_possession_in_zones(df_frames, meta: dict) -> dict:
 
 # ── field tilt ───────────────────────────────────────────────────────────────
 
-def compute_field_tilt(df_frames, meta: dict) -> dict:
+def compute_field_tilt(df_frames, meta: dict, confidence: float = 1.0) -> dict:
     """Field tilt: share of possession frames where the ball is in the
     attacking third for each team.
 
@@ -120,6 +126,11 @@ def compute_field_tilt(df_frames, meta: dict) -> dict:
 
     The midpoint of time splits the halves.
     """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return {"field_tilt": {}, "skipped_frames": len(df_frames),
+                "skipped": True, "reason": f"Transform confidence {confidence:.0%} below threshold",
+                "attack_direction_assumption": _DIRECTION_NOTE}
+
     court_length = meta.get("court_length", 23.32)
     fps = meta.get("fps", 24)
 

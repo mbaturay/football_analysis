@@ -112,9 +112,15 @@ meta: dict = load_json(str(meta_file), _mtime=_mtime(str(meta_file))) if meta_fi
 
 fps = meta.get("fps", 24)
 num_frames = meta.get("num_frames")
-duration_s = num_frames / fps if isinstance(num_frames, (int, float)) else None
-court_l = meta.get("court_length", "?")
-court_w = meta.get("court_width", "?")
+duration_s = meta.get("duration_s") or (num_frames / fps if isinstance(num_frames, (int, float)) else None)
+court_l = meta.get("pitch_length_m") or meta.get("court_length", "?")
+court_w = meta.get("pitch_width_m") or meta.get("court_width", "?")
+
+# Quality / confidence
+quality_json = try_json(sd, "quality.json")
+physical_quality = try_json(sd, "physical_quality.json")
+shape_skipped = try_json(sd, "shape_skipped.json")
+_confidence = (quality_json or {}).get("transform_confidence", None)
 
 TNAMES = team_names(meta)
 TCOLORS = team_colors(meta)
@@ -197,9 +203,13 @@ k1, k2, k3, k4, k5, k6 = st.columns(6)
 poss_str = f'{_pct(overall.get("1"))} / {_pct(overall.get("2"))}'
 k1.metric("Possession", poss_str if overall else "—")
 
-# KPI 2 — Field tilt
-ft_str = f'{_pct(ft_data.get("1"))} / {_pct(ft_data.get("2"))}'
-k2.metric("Field Tilt", ft_str if ft_data else "—")
+# KPI 2 — Field tilt (may be skipped if confidence is low)
+_ft_skipped = isinstance(ft_data, dict) and ft_data.get("skipped")
+if _ft_skipped:
+    k2.metric("Field Tilt", "skipped")
+else:
+    ft_str = f'{_pct(ft_data.get("1"))} / {_pct(ft_data.get("2"))}'
+    k2.metric("Field Tilt", ft_str if ft_data else "—")
 
 # KPI 3 — Regain time
 r1 = (regain_data.get("1") or {}).get("avg_regain_s")
@@ -225,7 +235,9 @@ else:
     k5.metric("Top Speed", "—")
 
 # KPI 6 — Compactness (avg team width x length or hull area)
-if df_dims_kpi is not None and not df_dims_kpi.empty:
+if shape_skipped:
+    k6.metric("Avg Shape", "skipped")
+elif df_dims_kpi is not None and not df_dims_kpi.empty:
     avg_w = df_dims_kpi["width_m"].mean()
     avg_l = df_dims_kpi["length_m"].mean()
     k6.metric("Avg Shape", f"{avg_w:.0f}w x {avg_l:.0f}l m")
@@ -238,25 +250,71 @@ else:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with st.expander("Assumptions & data quality", expanded=False):
-    aq1, aq2 = st.columns(2)
+    # ── confidence badge ──
+    if _confidence is not None:
+        if _confidence >= 0.7:
+            badge_color, badge_label = "#4caf50", "GOOD"
+        elif _confidence >= 0.35:
+            badge_color, badge_label = "#ff9800", "FAIR"
+        else:
+            badge_color, badge_label = "#f44336", "LOW"
+        st.markdown(
+            f'<span style="background:{badge_color};color:#fff;padding:4px 12px;'
+            f'border-radius:8px;font-weight:700;font-size:.85rem">'
+            f'Transform Confidence: {_confidence:.0%} — {badge_label}</span>',
+            unsafe_allow_html=True,
+        )
+        reasons = (quality_json or {}).get("confidence_reasons", [])
+        if reasons:
+            for r in reasons:
+                st.caption(f"- {r}")
+        st.markdown("")
+
+    aq1, aq2, aq3 = st.columns(3)
     with aq1:
-        st.markdown("**Attack direction**")
+        st.markdown("**Assumptions**")
         st.caption("Team 1 attacks +x in H1, -x in H2; Team 2 is opposite.  Halves split at time midpoint.")
-        st.markdown("**Sampling**")
         st.caption(f"Heavy shape stats sampled at 1 Hz (every {fps} frames).")
-        st.markdown("**Totals**")
         st.caption(f"Frames: {frames_str}  ·  FPS: {fps}")
         # Missing ball frames
         territory_json = try_json(sd, "ball_territory.json")
-        if territory_json:
-            skipped = territory_json.get("skipped_frames", "?")
-            st.caption(f"Skipped ball frames (missing position): **{skipped}**")
+        if territory_json and not territory_json.get("skipped"):
+            skipped_ball = territory_json.get("skipped_frames", "?")
+            st.caption(f"Skipped ball frames (missing position): **{skipped_ball}**")
+
     with aq2:
+        st.markdown("**Transform coverage**")
+        if quality_json:
+            st.caption(f"Ball position present: **{_pct(quality_json.get('ball_pos_present_pct'))}** "
+                       f"({quality_json.get('ball_pos_present_frames', '?')}/{quality_json.get('total_frames', '?')})")
+            st.caption(f"Ball in pitch bounds: **{_pct(quality_json.get('ball_pos_in_pitch_bounds_pct'))}**")
+            st.caption(f"Player position present: **{_pct(quality_json.get('players_pos_present_pct'))}**")
+            st.caption(f"Max speed observed: **{_val(quality_json.get('max_speed_kmh_observed'), '.1f', ' km/h')}**")
+            st.caption(f"Speed > 40 km/h: **{_pct(quality_json.get('pct_speed_over_40'))}**")
+            st.caption(f"Speed > 50 km/h: **{_pct(quality_json.get('pct_speed_over_50'))}**")
+        else:
+            st.caption("quality.json not found — run `compute_all_stats(run_dir)` to generate.")
+
+        if physical_quality:
+            st.markdown("**Speed sanitization**")
+            st.caption(f"Clipped: {physical_quality.get('clipped_speed_samples', 0)} / "
+                       f"{physical_quality.get('total_speed_samples', 0)} "
+                       f"({_pct(physical_quality.get('clipped_speed_pct'))})")
+
+    with aq3:
         st.markdown("**Files found**")
         found = check_files(sd)
         for fname, exists in found.items():
-            icon = "yes" if exists else "no"
             st.caption(f"{'[x]' if exists else '[ ]'} `{fname}`")
+
+    # ── debug images sub-expander ──
+    debug_dir = run_path / "debug"
+    if debug_dir.is_dir():
+        debug_imgs = sorted(debug_dir.glob("*.png"))
+        if debug_imgs:
+            with st.expander("Debug scatter / time-series plots", expanded=False):
+                for img_path in debug_imgs:
+                    st.image(str(img_path), caption=img_path.name, use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -370,9 +428,12 @@ with tab_poss:
             )
             st.altair_chart(chart, use_container_width=True)
 
-        # ── row 4: zone shares ──
+        # ── row 4: zone shares (may be skipped by confidence gating) ──
         zone_poss = possession_json.get("zone_possession", {})
-        if zone_poss:
+        _zone_skipped = isinstance(zone_poss, dict) and zone_poss.get("skipped")
+        if _zone_skipped:
+            st.info(f"Zone possession skipped: {zone_poss.get('reason', 'low transform confidence')}")
+        elif zone_poss:
             zp1, zp2 = st.columns(2)
             with zp1:
                 thirds = zone_poss.get("thirds", {})
@@ -422,8 +483,10 @@ with tab_poss:
                     )
                     st.altair_chart(chart, use_container_width=True)
 
-        # ── row 5: field tilt chart ──
-        if ft_data:
+        # ── row 5: field tilt chart (may be skipped) ──
+        if _ft_skipped:
+            st.info(f"Field tilt skipped: {ft_data.get('reason', 'low transform confidence')}")
+        elif ft_data:
             st.markdown("##### Field Tilt")
             ftdf = pd.DataFrame([{"team": TNAMES.get(int(k), f"T{k}"), "tilt": v} for k, v in ft_data.items()])
             chart = (
@@ -664,7 +727,13 @@ with tab_phys:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_shape:
     _df_dims = try_parquet(sd, "shape_dims.parquet")
-    if _df_dims is None:
+    if shape_skipped:
+        st.warning(
+            f"Shape metrics were skipped for this run.  "
+            f"**Reason:** {shape_skipped.get('reason', 'low transform confidence')}.  "
+            f"Confidence: {_pct(shape_skipped.get('confidence'))}."
+        )
+    elif _df_dims is None:
         st.info("Shape stats not available.  Run `compute_shape(run_dir)` to generate them.")
     else:
         # ── width / length over time ──
@@ -832,7 +901,10 @@ with tab_ball:
         with bc1:
             st.markdown("##### Ball Territory (thirds)")
             _territory_json = try_json(sd, "ball_territory.json")
-            if _territory_json:
+            _terr_skipped = isinstance(_territory_json, dict) and _territory_json.get("skipped")
+            if _terr_skipped:
+                st.info(f"Territory skipped: {_territory_json.get('reason', 'low transform confidence')}")
+            elif _territory_json:
                 thirds = _territory_json.get("thirds_overall", {})
                 if thirds:
                     tdf = pd.DataFrame([{"third": k, "pct": v} for k, v in thirds.items()])

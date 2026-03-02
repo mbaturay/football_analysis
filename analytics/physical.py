@@ -20,6 +20,45 @@ SPEED_BANDS = [
     ("sprint", 20, np.inf),
 ]
 
+MAX_PLAUSIBLE_SPEED_KMH = 45.0
+MAX_PLAUSIBLE_ACCEL_MS2 = 10.0
+
+
+# ── speed / accel sanitization ───────────────────────────────────────────────
+
+def sanitize_speeds(df_players: pd.DataFrame,
+                    max_speed_kmh: float = MAX_PLAUSIBLE_SPEED_KMH) -> tuple[pd.DataFrame, dict]:
+    """Clamp impossible speed_kmh values to None.  Returns (cleaned_df, quality_dict)."""
+    df = df_players.copy()
+    total = int(df["speed_kmh"].notna().sum()) if "speed_kmh" in df.columns else 0
+    clipped = 0
+    if "speed_kmh" in df.columns and total > 0:
+        bad = (df["speed_kmh"] < 0) | (df["speed_kmh"] > max_speed_kmh)
+        clipped = int(bad.sum())
+        df.loc[bad, "speed_kmh"] = np.nan
+    return df, {
+        "total_speed_samples": total,
+        "clipped_speed_samples": clipped,
+        "clipped_speed_pct": round(clipped / total, 4) if total > 0 else 0.0,
+        "max_speed_threshold_kmh": max_speed_kmh,
+    }
+
+
+def sanitize_accels(accel_arr: np.ndarray,
+                    max_accel: float = MAX_PLAUSIBLE_ACCEL_MS2) -> tuple[np.ndarray, dict]:
+    """Clamp impossible acceleration values to NaN.  Returns (cleaned, quality_dict)."""
+    total = int(np.isfinite(accel_arr).sum())
+    bad = np.abs(accel_arr) > max_accel
+    clipped = int(bad.sum())
+    cleaned = accel_arr.copy()
+    cleaned[bad] = np.nan
+    return cleaned, {
+        "total_accel_samples": total,
+        "clipped_accel_samples": clipped,
+        "clipped_accel_pct": round(clipped / total, 4) if total > 0 else 0.0,
+        "max_accel_threshold_ms2": max_accel,
+    }
+
 
 # ── data extraction ─────────────────────────────────────────────────────────
 

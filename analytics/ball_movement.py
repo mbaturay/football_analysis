@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from analytics.zones import classify_third, classify_lane, THIRD_LABELS, LANE_LABELS
+from analytics.quality import CONFIDENCE_THRESHOLD
 
 
 # ── 1. ball speed & distance per frame ──────────────────────────────────────
@@ -121,6 +122,7 @@ _PEN_WIDTH_REAL = 40.32  # meters wide, centred
 def territory(
     df_frames: pd.DataFrame,
     meta: dict,
+    confidence: float = 1.0,
 ) -> dict:
     """Ball time in each third (overall & by possessing team), plus danger-zone time.
 
@@ -128,6 +130,12 @@ def territory(
 
     Returns a JSON-serialisable dict.
     """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return {"thirds_overall": {}, "thirds_by_team": {},
+                "danger_zone_frames": {}, "penalty_box_approx": {},
+                "skipped_frames": len(df_frames),
+                "skipped": True, "reason": f"Transform confidence {confidence:.0%} below threshold"}
+
     court_length = meta.get("court_length", 23.32)
     court_width = meta.get("court_width", 68)
 

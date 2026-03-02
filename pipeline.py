@@ -163,7 +163,7 @@ def run_pipeline(config, progress_callback=None):
     target_vertices = config.get('target_vertices', None)
     view_transformer = ViewTransformer(
         court_width=config.get('court_width', 68),
-        court_length=config.get('court_length', 23.32),
+        court_length=config.get('court_length', 105),
         pixel_vertices=pixel_vertices,
         target_vertices=target_vertices,
     )
@@ -218,8 +218,11 @@ def run_pipeline(config, progress_callback=None):
     run_meta = {
         'fps': fps,
         'num_frames': num_frames,
+        'duration_s': round(num_frames / fps, 2),
         'court_width': config.get('court_width', 68),
         'court_length': config.get('court_length', 23.32),
+        'pitch_length_m': config.get('court_length', 23.32),
+        'pitch_width_m': config.get('court_width', 68),
         'model_path': config.get('model_path'),
         'conf_threshold': config.get('conf_threshold', 0.1),
         'batch_size': config.get('batch_size', 20),
@@ -255,20 +258,11 @@ def run_pipeline(config, progress_callback=None):
         codec=config.get('output_codec', 'XVID'),
     )
 
-    # Step 12: Compute analytics
+    # Step 12: Compute analytics (quality check first, then gated stats)
     update_progress("Computing analytics...", 0.93)
     try:
-        from analytics.compute_all import (
-            compute_possession, compute_physical,
-            compute_shape, compute_ball_movement,
-        )
-        compute_possession(run_dir)
-        update_progress("Computing analytics (physical)...", 0.95)
-        compute_physical(run_dir)
-        update_progress("Computing analytics (shape)...", 0.97)
-        compute_shape(run_dir)
-        update_progress("Computing analytics (ball)...", 0.99)
-        compute_ball_movement(run_dir)
+        from analytics.compute_all import compute_all_stats
+        compute_all_stats(run_dir)
     except Exception as e:
         # Analytics failure should not block the pipeline
         import warnings

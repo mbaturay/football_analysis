@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 class ViewTransformer():
-    def __init__(self, court_width=68, court_length=23.32, pixel_vertices=None, target_vertices=None):
+    def __init__(self, court_width=68, court_length=105, pixel_vertices=None, target_vertices=None):
         if pixel_vertices is None:
             pixel_vertices = np.array([[110, 1035],
                                    [265, 275],

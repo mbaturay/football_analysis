@@ -24,9 +24,40 @@ def main():
     stats_dir = os.path.join(run_dir, "stats")
     os.makedirs(stats_dir, exist_ok=True)
 
-    meta = {"fps": 24, "num_frames": 2400, "court_length": 23.32, "court_width": 68}
+    meta = {"fps": 24, "num_frames": 2400, "court_length": 23.32, "court_width": 68,
+            "pitch_length_m": 23.32, "pitch_width_m": 68, "duration_s": 100.0}
     with open(os.path.join(run_dir, "run_meta.json"), "w") as f:
         json.dump(meta, f)
+
+    # quality.json
+    quality = {
+        "total_frames": 2400,
+        "ball_pos_present_frames": 2200,
+        "ball_pos_present_pct": 0.9167,
+        "ball_pos_in_pitch_bounds_frames": 2100,
+        "ball_pos_in_pitch_bounds_pct": 0.9545,
+        "players_pos_present_pct": 0.88,
+        "max_speed_kmh_observed": 32.5,
+        "pct_speed_over_40": 0.01,
+        "pct_speed_over_50": 0.0,
+        "transform_confidence": 0.875,
+        "confidence_reasons": ["Transform looks reasonable"],
+        "any_out_of_bounds_examples": [],
+        "pitch_length_m": 23.32,
+        "pitch_width_m": 68.0,
+    }
+    with open(os.path.join(stats_dir, "quality.json"), "w") as f:
+        json.dump(quality, f)
+
+    # physical_quality.json
+    phys_quality = {
+        "total_speed_samples": 5000,
+        "clipped_speed_samples": 12,
+        "clipped_speed_pct": 0.0024,
+        "max_speed_threshold_kmh": 45.0,
+    }
+    with open(os.path.join(stats_dir, "physical_quality.json"), "w") as f:
+        json.dump(phys_quality, f)
 
     # possession.json (with zone_possession + field_tilt nested)
     poss = {
@@ -228,12 +259,21 @@ def main():
     py_compile.compile("ui/stats_helpers.py", doraise=True)
     print("\nui/stats_helpers.py compiles OK")
 
+    py_compile.compile("analytics/quality.py", doraise=True)
+    print("analytics/quality.py compiles OK")
+
+    py_compile.compile("analytics/compute_all.py", doraise=True)
+    print("analytics/compute_all.py compiles OK")
+
     stats_page = glob.glob("pages/1_*Stats.py")[0]
     py_compile.compile(stats_page, doraise=True)
     print("Stats page compiles OK")
 
     py_compile.compile("app.py", doraise=True)
     print("app.py compiles OK")
+
+    py_compile.compile("pipeline.py", doraise=True)
+    print("pipeline.py compiles OK")
 
     # 4. Test helpers module directly
     sys.path.insert(0, ".")

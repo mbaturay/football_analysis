@@ -3,9 +3,10 @@ Runner that loads run artifacts and writes all analytics.
 
 Usage::
 
-    from analytics.compute_all import compute_possession, compute_physical
-    compute_possession("runs/20260301_124219_abc123")
-    compute_physical("runs/20260301_124219_abc123")
+    from analytics.compute_all import compute_all_stats
+    compute_all_stats("runs/20260301_124219_abc123")
+
+Individual runners can still be called separately.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from analytics.physical import (
     accelerations,
     avg_position,
     heatmap_grid,
+    sanitize_speeds,
 )
 from analytics.shape import (
     team_centroid,
@@ -43,41 +45,82 @@ from analytics.ball_movement import (
     switches_of_play,
     directness_index,
 )
+from analytics.quality import (
+    compute_transform_coverage,
+    compute_speed_sanity,
+    compute_transform_confidence,
+    save_transform_debug_images,
+    CONFIDENCE_THRESHOLD,
+)
 
 
-def compute_possession(run_dir: str) -> dict:
+# ── quality / confidence ─────────────────────────────────────────────────────
+
+def compute_quality(run_dir: str) -> tuple[dict, float]:
+    """Compute quality.json and return (quality_dict, confidence_score).
+
+    Always runs first so other modules can check confidence.
+    """
+    meta = load_run_meta(run_dir)
+    df = load_frames(run_dir)
+
+    coverage = compute_transform_coverage(df, meta)
+
+    # Speed sanity needs expanded players
+    df_players = expand_players(df)
+    speed_sanity = compute_speed_sanity(df_players)
+
+    # Merge into one quality dict
+    quality = {**coverage, **speed_sanity}
+
+    confidence, reasons = compute_transform_confidence(quality)
+    quality["transform_confidence"] = confidence
+    quality["confidence_reasons"] = reasons
+
+    # Write quality.json
+    stats_dir = os.path.join(run_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+    with open(os.path.join(stats_dir, "quality.json"), "w") as f:
+        json.dump(_make_json_safe(quality), f, indent=2)
+
+    # Debug images (guarded)
+    try:
+        save_transform_debug_images(run_dir, df, meta)
+    except Exception:
+        pass
+
+    return quality, confidence
+
+
+# ── possession ───────────────────────────────────────────────────────────────
+
+def compute_possession(run_dir: str, confidence: float = 1.0) -> dict:
     """Load artifacts, run all possession analytics, write outputs.
 
-    Writes into ``<run_dir>/stats/``:
-        - possession.json
-        - possession_chains.parquet
-        - possession_rolling_5min.parquet
-
-    Returns the full results dict (same content as possession.json plus
-    the DataFrames).
+    Zone-based metrics (zone possession, field tilt) are skipped if confidence
+    is below threshold.  Non-zone metrics always run.
     """
     meta = load_run_meta(run_dir)
     df = load_frames(run_dir)
     fps = meta.get("fps", 24)
 
-    # 1. Summary (overall, by-half, rolling)
+    # 1. Summary (overall, by-half, rolling) — always computed
     summary = compute_possession_summary(df, fps)
     rolling_df = summary.pop("rolling_5min")
 
-    # 2. Chains
+    # 2. Chains — always computed
     chains_df, chains_summary = compute_possession_chains(df, fps)
 
-    # 3. Time to regain
+    # 3. Time to regain — always computed
     regain = compute_time_to_regain(df, fps)
 
-    # 4. Zones
-    zone_possession = compute_possession_in_zones(df, meta)
+    # 4. Zones — gated
+    zone_possession = compute_possession_in_zones(df, meta, confidence=confidence)
 
-    # 5. Field tilt
-    field_tilt = compute_field_tilt(df, meta)
+    # 5. Field tilt — gated
+    field_tilt = compute_field_tilt(df, meta, confidence=confidence)
 
     # ── assemble JSON-safe output ────────────────────────────────────────
-    # Strip regain_times lists from JSON (can be large); keep summary stats
     regain_json = {}
     for team, rdata in regain.items():
         regain_json[team] = {
@@ -97,8 +140,7 @@ def compute_possession(run_dir: str) -> dict:
     stats_dir = os.path.join(run_dir, "stats")
     os.makedirs(stats_dir, exist_ok=True)
 
-    json_path = os.path.join(stats_dir, "possession.json")
-    with open(json_path, "w") as f:
+    with open(os.path.join(stats_dir, "possession.json"), "w") as f:
         json.dump(_make_json_safe(output), f, indent=2)
 
     rolling_df.to_parquet(
@@ -108,31 +150,28 @@ def compute_possession(run_dir: str) -> dict:
         os.path.join(stats_dir, "possession_chains.parquet"), index=False
     )
 
-    # Return everything (including DataFrames) for programmatic use
     output["rolling_5min_df"] = rolling_df
     output["chains_df"] = chains_df
     output["time_to_regain_full"] = regain
     return output
 
 
+# ── physical ─────────────────────────────────────────────────────────────────
+
 def compute_physical(run_dir: str) -> dict:
     """Load artifacts, run all player physical analytics, write outputs.
 
-    Writes into ``<run_dir>/stats/``:
-        - physical_distance.parquet
-        - physical_speed.parquet
-        - physical_bands.parquet
-        - physical_accel.parquet
-        - physical_avgpos.parquet
-        - physical_heatmap.parquet
-
-    Returns a dict with all DataFrames keyed by name.
+    Speed values are sanitized (impossible speeds clamped to None).
+    Writes physical_quality.json with clipping stats.
     """
     meta = load_run_meta(run_dir)
     df = load_frames(run_dir)
     fps = meta.get("fps", 24)
 
     df_players = expand_players(df)
+
+    # Sanitize speeds before computing any speed-based metrics
+    df_players, speed_quality = sanitize_speeds(df_players)
 
     df_dist = distance_covered(df_players, fps)
     df_speed = speed_profile(df_players)
@@ -155,24 +194,33 @@ def compute_physical(run_dir: str) -> dict:
     for name, frame in parquets.items():
         frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
 
+    # Write physical quality
+    with open(os.path.join(stats_dir, "physical_quality.json"), "w") as f:
+        json.dump(_make_json_safe(speed_quality), f, indent=2)
+
     return parquets
 
 
-def compute_shape(run_dir: str) -> dict:
+# ── shape ────────────────────────────────────────────────────────────────────
+
+def compute_shape(run_dir: str, confidence: float = 1.0) -> dict:
     """Load artifacts, run all team shape analytics, write outputs.
 
-    Writes into ``<run_dir>/stats/``:
-        - shape_centroid.parquet
-        - shape_dims.parquet
-        - shape_area.parquet
-        - shape_def_line.parquet
-        - shape_line_dist.parquet
-
-    Heavy per-frame metrics (area, def line, line distances) are sampled
-    at 1 Hz (every *fps* frames) by default.
-
-    Returns a dict with all DataFrames keyed by name.
+    Skipped entirely if confidence is below threshold.
     """
+    stats_dir = os.path.join(run_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+
+    if confidence < CONFIDENCE_THRESHOLD:
+        skipped = {
+            "skipped": True,
+            "reason": f"Transform confidence {confidence:.0%} below threshold",
+            "confidence": confidence,
+        }
+        with open(os.path.join(stats_dir, "shape_skipped.json"), "w") as f:
+            json.dump(skipped, f, indent=2)
+        return {}
+
     meta = load_run_meta(run_dir)
     df = load_frames(run_dir)
     fps = int(meta.get("fps", 24))
@@ -185,9 +233,6 @@ def compute_shape(run_dir: str) -> dict:
     df_def_line = defensive_line_height(df_players, meta=meta, sample_every=fps)
     df_line_dist = line_distances(df_players, sample_every=fps)
 
-    stats_dir = os.path.join(run_dir, "stats")
-    os.makedirs(stats_dir, exist_ok=True)
-
     parquets = {
         "shape_centroid": df_centroid,
         "shape_dims": df_dims,
@@ -198,28 +243,29 @@ def compute_shape(run_dir: str) -> dict:
     for name, frame in parquets.items():
         frame.to_parquet(os.path.join(stats_dir, f"{name}.parquet"), index=False)
 
+    # Remove skipped marker if it existed from a previous run
+    skipped_path = os.path.join(stats_dir, "shape_skipped.json")
+    if os.path.isfile(skipped_path):
+        os.remove(skipped_path)
+
     return parquets
 
 
-def compute_ball_movement(run_dir: str) -> dict:
+# ── ball movement ────────────────────────────────────────────────────────────
+
+def compute_ball_movement(run_dir: str, confidence: float = 1.0) -> dict:
     """Load artifacts, run all ball-movement analytics, write outputs.
 
-    Writes into ``<run_dir>/stats/``:
-        - ball_frame.parquet
-        - ball_possession_metrics.parquet
-        - ball_territory.json
-        - ball_switches.parquet
-
-    Returns a dict with all DataFrames / dicts keyed by name.
+    Ball speed per frame always runs.  Territory is gated by confidence.
     """
     meta = load_run_meta(run_dir)
     df = load_frames(run_dir)
     fps = meta.get("fps", 24)
 
-    # Ball speed per frame
+    # Ball speed per frame — always runs
     df_ball = ball_speed_and_distance(df, fps)
 
-    # Need possession chains for progression & directness
+    # Possession chains needed for progression & directness
     from analytics.possession import compute_possession_chains
     chains_df, _ = compute_possession_chains(df, fps)
 
@@ -227,18 +273,16 @@ def compute_ball_movement(run_dir: str) -> dict:
     df_prog = progression(df, chains_df, meta)
     df_direct = directness_index(df_ball, chains_df, meta)
 
-    # Merge progression + directness into one table
     if not df_prog.empty and not df_direct.empty:
         df_metrics = df_prog.merge(
             df_direct[["chain_id", "total_dist_m", "directness"]],
-            on="chain_id",
-            how="left",
+            on="chain_id", how="left",
         )
     else:
         df_metrics = df_prog
 
-    # Territory dict
-    territory_dict = territory(df, meta)
+    # Territory — gated
+    territory_dict = territory(df, meta, confidence=confidence)
 
     # Switches of play
     df_switches = switches_of_play(df, meta)
@@ -254,7 +298,6 @@ def compute_ball_movement(run_dir: str) -> dict:
     df_switches.to_parquet(
         os.path.join(stats_dir, "ball_switches.parquet"), index=False
     )
-
     with open(os.path.join(stats_dir, "ball_territory.json"), "w") as f:
         json.dump(_make_json_safe(territory_dict), f, indent=2)
 
@@ -264,6 +307,20 @@ def compute_ball_movement(run_dir: str) -> dict:
         "ball_territory": territory_dict,
         "ball_switches": df_switches,
     }
+
+
+# ── combined runner ──────────────────────────────────────────────────────────
+
+def compute_all_stats(run_dir: str) -> dict:
+    """Run quality check first, then all analytics with confidence gating."""
+    quality, confidence = compute_quality(run_dir)
+
+    results = {"quality": quality, "confidence": confidence}
+    results["possession"] = compute_possession(run_dir, confidence=confidence)
+    results["physical"] = compute_physical(run_dir)
+    results["shape"] = compute_shape(run_dir, confidence=confidence)
+    results["ball_movement"] = compute_ball_movement(run_dir, confidence=confidence)
+    return results
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -285,3 +342,11 @@ def _make_json_safe(obj):
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     return obj
+
+
+# ── smoke test steps ─────────────────────────────────────────────────────────
+# 1. Run pipeline on a video
+# 2. Confirm runs/<id>/stats/quality.json exists with transform_confidence
+# 3. Open Stats page and confirm confidence displayed
+# 4. Confirm runs/<id>/debug/ contains PNG images
+# 5. If confidence < 0.35, confirm shape/zone sections show "skipped" card

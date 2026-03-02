@@ -83,6 +83,7 @@ def json_to_bytes(d: dict) -> bytes:
 # ── expected stats files ─────────────────────────────────────────────────────
 
 EXPECTED_FILES = [
+    "quality.json",
     "possession.json",
     "possession_rolling_5min.parquet",
     "possession_chains.parquet",
@@ -92,6 +93,7 @@ EXPECTED_FILES = [
     "physical_accel.parquet",
     "physical_avgpos.parquet",
     "physical_heatmap.parquet",
+    "physical_quality.json",
     "shape_centroid.parquet",
     "shape_dims.parquet",
     "shape_area.parquet",
