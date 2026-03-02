@@ -1,0 +1,30 @@
+{
+  "fps": 24,
+  "num_frames": 750,
+  "court_width": 68.0,
+  "court_length": 23.32,
+  "model_path": "models/best.pt",
+  "conf_threshold": 0.1,
+  "batch_size": 20,
+  "max_player_ball_distance": 70,
+  "frame_window": 5,
+  "input_video_path": "input_videos/08fd33_4.mp4",
+  "pixel_vertices": [
+    [
+      110,
+      1035
+    ],
+    [
+      265,
+      275
+    ],
+    [
+      910,
+      260
+    ],
+    [
+      1640,
+      915
+    ]
+  ]
+}

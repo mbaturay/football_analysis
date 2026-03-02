@@ -44,14 +44,15 @@ def _build_frames_df(tracks, team_ball_control, fps):
         team_positions = {}  # team_id -> list of (x, y)
         for pid, pinfo in tracks['players'][frame_num].items():
             px, py = _best_position(pinfo)
+            team_val = pinfo.get('team')
             player_rec = {
                 'id': int(pid),
-                'team': pinfo.get('team'),
-                'x': px,
-                'y': py,
-                'speed_kmh': pinfo.get('speed'),
-                'distance_m': pinfo.get('distance'),
-                'has_ball': pinfo.get('has_ball', False),
+                'team': int(team_val) if team_val is not None else None,
+                'x': float(px) if px is not None else None,
+                'y': float(py) if py is not None else None,
+                'speed_kmh': float(pinfo['speed']) if pinfo.get('speed') is not None else None,
+                'distance_m': float(pinfo['distance']) if pinfo.get('distance') is not None else None,
+                'has_ball': bool(pinfo.get('has_ball', False)),
             }
             players_list.append(player_rec)
 
@@ -63,7 +64,7 @@ def _build_frames_df(tracks, team_ball_control, fps):
         for tid, positions in team_positions.items():
             xs = [p[0] for p in positions]
             ys = [p[1] for p in positions]
-            centroids[tid] = {'x': sum(xs) / len(xs), 'y': sum(ys) / len(ys)}
+            centroids[int(tid)] = {'x': float(sum(xs) / len(xs)), 'y': float(sum(ys) / len(ys))}
 
         rows.append({
             'frame': frame_num,
@@ -119,6 +120,12 @@ def run_pipeline(config, progress_callback=None):
     )
     tracker.add_position_to_tracks(tracks)
 
+    # Clamp tracks to video length (stubs may have more frames than video_frames)
+    n_video = len(video_frames)
+    for obj_key in tracks:
+        if isinstance(tracks[obj_key], list) and len(tracks[obj_key]) > n_video:
+            tracks[obj_key] = tracks[obj_key][:n_video]
+
     # Step 3: Camera movement
     update_progress("Estimating camera movement (0%)...", 0.40)
     camera_movement_estimator = CameraMovementEstimator(
@@ -144,6 +151,10 @@ def run_pipeline(config, progress_callback=None):
         stub_path=config.get('camera_stub_path', 'stubs/camera_movement_stub.pkl'),
         progress_callback=camera_progress,
     )
+    # Clamp camera movement to video length (stub may be longer)
+    if len(camera_movement_per_frame) > n_video:
+        camera_movement_per_frame = camera_movement_per_frame[:n_video]
+
     camera_movement_estimator.add_adjust_positions_to_tracks(tracks, camera_movement_per_frame)
 
     # Step 4: View transform
@@ -236,13 +247,32 @@ def run_pipeline(config, progress_callback=None):
     speed_and_distance_estimator.draw_speed_and_distance(output_video_frames, tracks)
 
     # Step 11: Save video
-    update_progress("Saving output video...", 0.95)
+    update_progress("Saving output video...", 0.90)
     output_path = config.get('output_video_path', 'output_videos/output_video.avi')
     save_video(
         output_video_frames, output_path,
         fps=config.get('output_fps', 24),
         codec=config.get('output_codec', 'XVID'),
     )
+
+    # Step 12: Compute analytics
+    update_progress("Computing analytics...", 0.93)
+    try:
+        from analytics.compute_all import (
+            compute_possession, compute_physical,
+            compute_shape, compute_ball_movement,
+        )
+        compute_possession(run_dir)
+        update_progress("Computing analytics (physical)...", 0.95)
+        compute_physical(run_dir)
+        update_progress("Computing analytics (shape)...", 0.97)
+        compute_shape(run_dir)
+        update_progress("Computing analytics (ball)...", 0.99)
+        compute_ball_movement(run_dir)
+    except Exception as e:
+        # Analytics failure should not block the pipeline
+        import warnings
+        warnings.warn(f"Analytics computation failed: {e}")
 
     update_progress("Done!", 1.0)
     return output_video_frames, output_path, run_dir

@@ -1,0 +1,72 @@
+{
+  "possession_overall": {
+    "1": 0.6374,
+    "2": 0.3626
+  },
+  "possession_by_half": {
+    "1": {
+      "1": 0.6556,
+      "2": 0.3444
+    },
+    "2": {
+      "1": 0.6191,
+      "2": 0.3809
+    }
+  },
+  "chains_summary": {
+    "1": {
+      "avg_possession_duration_s": 1.504,
+      "longest_possession_duration_s": 25.0,
+      "number_of_possessions": 170
+    },
+    "2": {
+      "avg_possession_duration_s": 0.833,
+      "longest_possession_duration_s": 16.75,
+      "number_of_possessions": 171
+    }
+  },
+  "time_to_regain": {
+    "1": {
+      "avg_regain_s": 0.863,
+      "median_regain_s": 0.292,
+      "count": 169
+    },
+    "2": {
+      "avg_regain_s": 1.546,
+      "median_regain_s": 0.417,
+      "count": 170
+    }
+  },
+  "zone_possession": {
+    "thirds": {
+      "1": {
+        "defensive": 0.0,
+        "middle": 0.0,
+        "attacking": 0.0
+      },
+      "2": {
+        "defensive": 0.0,
+        "middle": 0.0,
+        "attacking": 0.0
+      }
+    },
+    "lanes": {
+      "1": {
+        "left": 0.0,
+        "center": 0.0,
+        "right": 0.0
+      },
+      "2": {
+        "left": 0.0,
+        "center": 0.0,
+        "right": 0.0
+      }
+    },
+    "skipped_frames": 9897
+  },
+  "field_tilt": {
+    "field_tilt": {},
+    "skipped_frames": 9897,
+    "attack_direction_assumption": "team 1 attacks +x in first half, -x in second half; team 2 is opposite. Halves split at time midpoint."
+  }
+}
