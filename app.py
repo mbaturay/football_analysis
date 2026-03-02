@@ -52,6 +52,10 @@ if _saved_calib:
     if _saved_calib.get("pixel_vertices"):
         _def_pv = _saved_calib["pixel_vertices"]
 
+# If calibration tool just auto-filled corners, use those as new defaults
+if "_autofilled_pv" in st.session_state:
+    _def_pv = st.session_state.pop("_autofilled_pv")
+
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -123,22 +127,25 @@ with st.sidebar.expander("🏟️ Pitch / View Transform"):
     if pitch_width < 40 or pitch_width > 100:
         st.warning(f"Pitch width {pitch_width} m seems wrong for a full pitch (expected 45-90 m).")
 
-    st.markdown("**Pixel vertices** (4 reference points in video)")
-    st.caption("Near Left, Far Left, Far Right, Near Right")
+    st.markdown("**Pixel vertices** (4 pitch corners in video)")
+    st.caption("Near Left, Far Left, Far Right, Near Right — auto-filled by calibration tool or editable below.")
 
     from ui.calibration import VERTEX_LABELS
+
+    override_corners = st.checkbox("Override corners manually", value=False, key="override_corners")
     pv_cols = st.columns(2)
-    pv1_x = pv_cols[0].number_input(f"{VERTEX_LABELS[0]} X", value=int(_def_pv[0][0]), key="pv1x")
-    pv1_y = pv_cols[1].number_input(f"{VERTEX_LABELS[0]} Y", value=int(_def_pv[0][1]), key="pv1y")
-    pv2_x = pv_cols[0].number_input(f"{VERTEX_LABELS[1]} X", value=int(_def_pv[1][0]), key="pv2x")
-    pv2_y = pv_cols[1].number_input(f"{VERTEX_LABELS[1]} Y", value=int(_def_pv[1][1]), key="pv2y")
-    pv3_x = pv_cols[0].number_input(f"{VERTEX_LABELS[2]} X", value=int(_def_pv[2][0]), key="pv3x")
-    pv3_y = pv_cols[1].number_input(f"{VERTEX_LABELS[2]} Y", value=int(_def_pv[2][1]), key="pv3y")
-    pv4_x = pv_cols[0].number_input(f"{VERTEX_LABELS[3]} X", value=int(_def_pv[3][0]), key="pv4x")
-    pv4_y = pv_cols[1].number_input(f"{VERTEX_LABELS[3]} Y", value=int(_def_pv[3][1]), key="pv4y")
+    pv1_x = pv_cols[0].number_input(f"{VERTEX_LABELS[0]} X", value=int(_def_pv[0][0]), key="pv1x", disabled=not override_corners)
+    pv1_y = pv_cols[1].number_input(f"{VERTEX_LABELS[0]} Y", value=int(_def_pv[0][1]), key="pv1y", disabled=not override_corners)
+    pv2_x = pv_cols[0].number_input(f"{VERTEX_LABELS[1]} X", value=int(_def_pv[1][0]), key="pv2x", disabled=not override_corners)
+    pv2_y = pv_cols[1].number_input(f"{VERTEX_LABELS[1]} Y", value=int(_def_pv[1][1]), key="pv2y", disabled=not override_corners)
+    pv3_x = pv_cols[0].number_input(f"{VERTEX_LABELS[2]} X", value=int(_def_pv[2][0]), key="pv3x", disabled=not override_corners)
+    pv3_y = pv_cols[1].number_input(f"{VERTEX_LABELS[2]} Y", value=int(_def_pv[2][1]), key="pv3y", disabled=not override_corners)
+    pv4_x = pv_cols[0].number_input(f"{VERTEX_LABELS[3]} X", value=int(_def_pv[3][0]), key="pv4x", disabled=not override_corners)
+    pv4_y = pv_cols[1].number_input(f"{VERTEX_LABELS[3]} Y", value=int(_def_pv[3][1]), key="pv4y", disabled=not override_corners)
 
     if _saved_calib:
-        st.success("Loaded saved calibration from calibration.json")
+        _method = _saved_calib.get("calibration_method", "unknown")
+        st.success(f"Loaded saved calibration from calibration.json (method: {_method})")
 
 # Visualization
 with st.sidebar.expander("🎨 Visualization"):
@@ -181,24 +188,46 @@ with col2:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with st.expander("🎯 Pitch Calibration Tool", expanded=False):
-    st.caption(
-        "Pick a frame with visible touchlines and penalty box lines, "
-        "then click 4 pitch corners in order."
+    from ui.calibration import (
+        get_video_info, read_frame, frame_to_rgb,
+        draw_points_on_frame, project_grid_onto_frame,
+        build_homography, autofill_pixel_corners,
+        build_calibration_config, save_calibration_json,
+        VERTEX_LABELS, VERTEX_HELP,
+        CALIBRATION_METHODS, METHOD_TEMPLATE1, METHOD_MANUAL,
+        TEMPLATE1_LABELS, TEMPLATE1_HELP,
     )
+    import cv2
+
+    # ── method selector ──
+    calib_method = st.selectbox(
+        "Calibration method",
+        CALIBRATION_METHODS,
+        index=0,
+        key="calib_method",
+        help="Template 1 is recommended when the halfway line and centre circle are visible.",
+    )
+
+    if calib_method == METHOD_TEMPLATE1:
+        st.caption(
+            "Click 4 points: left & right touchline×halfway intersections, "
+            "then the left & right apexes of the centre circle."
+        )
+        point_labels = TEMPLATE1_LABELS
+        help_text = TEMPLATE1_HELP
+    else:
+        st.caption(
+            "Click the 4 visible pitch corners in order: "
+            "Near Left, Far Left, Far Right, Near Right."
+        )
+        point_labels = VERTEX_LABELS
+        help_text = VERTEX_HELP
 
     video_path = _get_video_path()
 
     if video_path is None:
         st.info("Load a video first (upload or enable sample) to use the calibration tool.")
     else:
-        from ui.calibration import (
-            get_video_info, read_frame, frame_to_rgb,
-            draw_points_on_frame, project_grid_onto_frame,
-            build_calibration_config, save_calibration_json,
-            VERTEX_LABELS, VERTEX_HELP,
-        )
-        import cv2
-
         vinfo = get_video_info(video_path)
         if not vinfo["ok"]:
             st.error("Cannot open video file.")
@@ -223,6 +252,13 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
             else:
                 frame_rgb = frame_to_rgb(frame_bgr)
 
+                # Reset points when method changes
+                if "calib_prev_method" not in st.session_state:
+                    st.session_state["calib_prev_method"] = calib_method
+                if st.session_state["calib_prev_method"] != calib_method:
+                    st.session_state["calib_points"] = []
+                    st.session_state["calib_prev_method"] = calib_method
+
                 # Initialize calibration points in session state
                 if "calib_points" not in st.session_state:
                     st.session_state["calib_points"] = []
@@ -232,13 +268,13 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
                 # Show how many points collected and what's next
                 n_pts = len(calib_pts)
                 if n_pts < 4:
-                    next_label = VERTEX_LABELS[n_pts]
+                    next_label = point_labels[n_pts]
                     st.info(f"Click on the frame to place point {n_pts + 1}/4: **{next_label}**")
                 else:
                     st.success("All 4 points placed. Preview the overlay or save to config.")
 
                 # Draw existing points on frame
-                display_img = draw_points_on_frame(frame_rgb, calib_pts)
+                display_img = draw_points_on_frame(frame_rgb, calib_pts, labels=point_labels)
 
                 # Resize for display (keep aspect, max width ~800)
                 h, w = display_img.shape[:2]
@@ -252,7 +288,7 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
 
                 click_result = streamlit_image_coordinates(
                     display_resized,
-                    key=f"calib_click_{calib_frame_idx}_{n_pts}",
+                    key=f"calib_click_{calib_frame_idx}_{n_pts}_{calib_method}",
                 )
 
                 if click_result is not None and n_pts < 4:
@@ -266,7 +302,7 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
                 if calib_pts:
                     st.markdown("**Selected points:**")
                     for i, (px, py) in enumerate(calib_pts):
-                        label = VERTEX_LABELS[i] if i < 4 else f"P{i + 1}"
+                        label = point_labels[i] if i < len(point_labels) else f"P{i + 1}"
                         st.caption(f"  {i + 1}. {label}: ({px:.0f}, {py:.0f})")
 
                 btn_cols = st.columns(3)
@@ -280,7 +316,7 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
                         st.rerun()
 
                 with st.expander("Point ordering guide", expanded=False):
-                    st.text(VERTEX_HELP)
+                    st.text(help_text)
 
                 # ── preview overlay ──
                 has_all_4 = len(calib_pts) >= 4
@@ -292,6 +328,7 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
                 ):
                     overlay_img, overlay_warnings = project_grid_onto_frame(
                         frame_rgb, calib_pts[:4], pitch_length, pitch_width,
+                        method=calib_method,
                     )
                     st.image(overlay_img, caption="Projected pitch grid overlay", use_container_width=True)
                     if overlay_warnings:
@@ -300,29 +337,38 @@ with st.expander("🎯 Pitch Calibration Tool", expanded=False):
                     else:
                         st.success("Grid projected successfully — lines should align with visible pitch markings.")
 
-                # ── save to config ──
+                # ── save to config (with auto-fill) ──
                 if st.button(
                     "Save calibration to config",
                     disabled=not has_all_4,
                     key="calib_save",
                 ):
-                    calib_dict = build_calibration_config(
-                        pitch_length, pitch_width, calib_pts[:4],
-                    )
-                    save_calibration_json(CALIB_CONFIG_PATH, calib_dict)
-                    st.success(f"Calibration saved to `{CALIB_CONFIG_PATH}`.")
-                    st.caption("Sidebar values will update on next page load.")
-                    # Update session state so sidebar picks up new values on rerun
-                    st.session_state["pv1x"] = int(calib_pts[0][0])
-                    st.session_state["pv1y"] = int(calib_pts[0][1])
-                    st.session_state["pv2x"] = int(calib_pts[1][0])
-                    st.session_state["pv2y"] = int(calib_pts[1][1])
-                    st.session_state["pv3x"] = int(calib_pts[2][0])
-                    st.session_state["pv3y"] = int(calib_pts[2][1])
-                    st.session_state["pv4x"] = int(calib_pts[3][0])
-                    st.session_state["pv4y"] = int(calib_pts[3][1])
-                    st.session_state["pitch_length"] = pitch_length
-                    st.session_state["pitch_width"] = pitch_width
+                    # Compute homography from the clicked points
+                    H = build_homography(calib_method, calib_pts[:4], pitch_length, pitch_width)
+                    if H is None:
+                        st.error("Could not compute homography from the selected points.")
+                    else:
+                        # Auto-fill: project pitch corners back to image
+                        filled_corners = autofill_pixel_corners(H, pitch_length, pitch_width)
+                        if filled_corners is None:
+                            st.error("Homography is singular — cannot auto-fill corners.")
+                        else:
+                            # The auto-filled corners become the pixel_vertices
+                            calib_dict = build_calibration_config(
+                                pitch_length, pitch_width,
+                                pixel_points=filled_corners,
+                                method=calib_method,
+                                image_points=calib_pts[:4],
+                                autofilled_corners=filled_corners,
+                            )
+                            save_calibration_json(CALIB_CONFIG_PATH, calib_dict)
+                            st.success(f"Calibration saved to `{CALIB_CONFIG_PATH}`.")
+
+                            # Store auto-filled corners for next rerun (can't set widget keys after render)
+                            st.session_state["_autofilled_pv"] = [
+                                [int(round(x)), int(round(y))] for x, y in filled_corners
+                            ]
+                            st.rerun()
 
 
 st.markdown("---")
